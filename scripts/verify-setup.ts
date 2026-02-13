@@ -33,7 +33,7 @@ async function verify() {
         const events = await calendar.getEvents()
         console.log(`✅ Google Calendar Connection Successful. Found ${events.length} upcoming events.`)
         if (events.length > 0) {
-            console.log(`First event: ${events[0].summary} at ${events[0].start?.dateTime || events[0].start?.date}`)
+            console.log(`First event: ${events[0].summary} at ${events[0].start}`)
         }
     } catch (error) {
         console.error('❌ Google Calendar Connection Failed:', error)
