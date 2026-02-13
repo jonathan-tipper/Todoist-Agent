@@ -2,6 +2,7 @@
 'use client'
 
 import { useChat } from '@ai-sdk/react'
+import Image from 'next/image'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -114,8 +115,15 @@ export function Chat() {
             <CardHeader>
                 <CardTitle className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                        <Bot className="w-6 h-6 text-primary" />
-                        Todoist Agent
+                        <div className="relative w-8 h-8">
+                            <Image
+                                src="/logo.svg"
+                                alt="Todoist Agent Logo"
+                                fill
+                                className="object-contain drop-shadow-[0_0_8px_rgba(239,68,68,0.5)]"
+                            />
+                        </div>
+                        <span className="font-bold text-lg tracking-tight">Todoist Agent</span>
                     </div>
                     <div className="flex items-center gap-2">
                         <Select value={selectedModel} onValueChange={setSelectedModel}>
