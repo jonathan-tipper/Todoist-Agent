@@ -13,10 +13,13 @@ import { useState, useEffect, useRef } from 'react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AuthWall } from './auth-wall'
 import { ModeToggle } from './mode-toggle'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 export function Chat() {
     const [selectedModel, setSelectedModel] = useState(process.env.NEXT_PUBLIC_DEFAULT_MODEL || 'llama-3.3-70b')
     const [accessCode, setAccessCode] = useState<string | null>(null)
+    const [dynamicSuggestions, setDynamicSuggestions] = useState<any[]>([])
 
     // @ts-ignore
     const { messages, input, setInput, handleInputChange, handleSubmit, isLoading, error, reload } = useChat({
@@ -59,18 +62,56 @@ export function Chat() {
         }
     }, [messages, isLoading])
 
+
+    // Effect to listen for suggestActions tool calls
+    useEffect(() => {
+        if (!messages.length) return
+
+        const lastMessage = messages[messages.length - 1]
+        if (lastMessage.role !== 'assistant') return
+
+        // Check for suggestActions tool call
+        // @ts-ignore
+        const toolCalls = lastMessage.toolInvocations || []
+        const suggestActionCall = toolCalls.find((t: any) => t.toolName === 'suggestActions' && t.state === 'result')
+
+        if (suggestActionCall) {
+            const actions = suggestActionCall.args.actions
+            if (actions && Array.isArray(actions)) {
+                setDynamicSuggestions(actions.map((a: any) => ({
+                    label: a.label,
+                    action: a.action,
+                    icon: getIconForType(a.type)
+                })))
+            }
+        }
+    }, [messages])
+
+    const getIconForType = (type: string) => {
+        switch (type) {
+            case 'calendar': return <Bot className="w-4 h-4" />
+            case 'task': return <CheckCircle2 className="w-4 h-4" />
+            case 'plan': return <Terminal className="w-4 h-4" />
+            case 'search': return <Loader2 className="w-4 h-4" />
+            default: return <Send className="w-4 h-4" />
+        }
+    }
+
     // If not authenticated, show AuthWall
     if (!accessCode) {
         return <AuthWall onAuthenticated={setAccessCode} />
     }
 
-    const suggestedActions = [
+    const defaultSuggestions = [
         { label: "Plan my day", action: "Plan my day", icon: <CheckCircle2 className="w-4 h-4" /> },
         { label: "Add task", action: "Add a task to buy milk", icon: <Send className="w-4 h-4" /> },
         { label: "Check calendar", action: "What do I have today?", icon: <Bot className="w-4 h-4" /> },
         { label: "My tasks", action: "Show my main tasks for today", icon: <Terminal className="w-4 h-4" /> },
         { label: "Overdue", action: "Show overdue tasks", icon: <Loader2 className="w-4 h-4" /> },
     ]
+
+
+    const currentSuggestions = dynamicSuggestions.length > 0 ? dynamicSuggestions : defaultSuggestions
 
     const handleSuggestionClick = (action: string) => {
         setInput(action)
@@ -111,7 +152,7 @@ export function Chat() {
     ]
 
     return (
-        <Card className="flex flex-col h-[600px] w-full max-w-2xl min-w-[350px] mx-auto shadow-xl">
+        <Card className="flex flex-col h-full w-full border-0 rounded-none shadow-none bg-background">
             <CardHeader>
                 <CardTitle className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -164,16 +205,89 @@ export function Chat() {
                                         {m.role === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                                     </AvatarFallback>
                                 </Avatar>
-                                <div className={`flex flex-col gap-2 max-w-[80%]`}>
+                                <div className={`flex flex-col gap-2 w-full max-w-full ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                    {/* Text Content */}
                                     {/* Text Content */}
                                     {m.content && (
                                         <div
-                                            className={`rounded-lg p-3 text-sm whitespace-pre-wrap break-words w-fit shadow-sm ${m.role === 'user'
-                                                ? 'bg-primary text-primary-foreground ml-auto'
-                                                : 'bg-muted text-foreground'
+                                            className={`rounded-2xl px-4 py-3 text-sm shadow-sm ${m.role === 'user'
+                                                ? 'bg-primary text-primary-foreground ml-auto max-w-[85%]'
+                                                : 'bg-muted/50 text-foreground w-full max-w-full'
                                                 }`}
                                         >
-                                            {m.content}
+                                            {m.role === 'user' ? (
+                                                <div className="whitespace-pre-wrap">{m.content}</div>
+                                            ) : (
+                                                <div className="prose prose-neutral dark:prose-invert max-w-none text-sm
+                                                        prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent
+                                                        prose-table:border-collapse prose-table:border prose-table:border-border
+                                                        prose-th:border prose-th:border-border prose-th:bg-muted/50 prose-th:p-2
+                                                        prose-td:border prose-td:border-border prose-td:p-2
+                                                        [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                                                    <ReactMarkdown
+                                                        remarkPlugins={[remarkGfm]}
+                                                        components={{
+                                                            // Custom table styling
+                                                            table: ({ node, ...props }) => (
+                                                                <div className="my-4 w-full overflow-y-auto rounded-lg border border-border">
+                                                                    <table className="w-full text-left" {...props} />
+                                                                </div>
+                                                            ),
+                                                            thead: ({ node, ...props }) => (
+                                                                <thead className="bg-muted/50 text-muted-foreground" {...props} />
+                                                            ),
+                                                            th: ({ node, ...props }) => (
+                                                                <th className="px-4 py-2 font-medium" {...props} />
+                                                            ),
+                                                            td: ({ node, ...props }) => (
+                                                                <td className="border-t border-border px-4 py-2" {...props} />
+                                                            ),
+                                                            // Custom link styling
+                                                            a: ({ node, ...props }) => (
+                                                                <a className="font-medium text-primary underline underline-offset-4 hover:text-primary/80" {...props} />
+                                                            ),
+                                                            // Custom code block styling
+                                                            code: ({ node, className, children, ...props }) => {
+                                                                const match = /language-(\w+)/.exec(className || '')
+                                                                // @ts-ignore
+                                                                const isInline = !match && !String(children).includes('\n')
+
+                                                                if (isInline) {
+                                                                    return (
+                                                                        <code className="relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-xs font-semibold" {...props}>
+                                                                            {children}
+                                                                        </code>
+                                                                    )
+                                                                }
+
+                                                                return (
+                                                                    <div className="relative my-4 overflow-hidden rounded-lg border bg-zinc-950 dark:bg-zinc-900">
+                                                                        <div className="flex items-center justify-between px-4 py-2 text-xs text-zinc-50 border-b border-zinc-700 bg-zinc-800/50">
+                                                                            <span>{match?.[1] || 'text'}</span>
+                                                                        </div>
+                                                                        <div className="p-4 overflow-x-auto">
+                                                                            <code className={`font-mono text-xs text-zinc-50 ${className}`} {...props}>
+                                                                                {children}
+                                                                            </code>
+                                                                        </div>
+                                                                    </div>
+                                                                )
+                                                            },
+                                                            ul: ({ node, ...props }) => (
+                                                                <ul className="my-2 ml-6 list-disc [&>li]:mt-1" {...props} />
+                                                            ),
+                                                            ol: ({ node, ...props }) => (
+                                                                <ol className="my-2 ml-6 list-decimal [&>li]:mt-1" {...props} />
+                                                            ),
+                                                            li: ({ node, ...props }) => (
+                                                                <li className="" {...props} />
+                                                            ),
+                                                        }}
+                                                    >
+                                                        {m.content}
+                                                    </ReactMarkdown>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
@@ -253,7 +367,7 @@ export function Chat() {
             <CardFooter className="p-4 border-t bg-background/50 backdrop-blur-sm flex flex-col gap-3">
                 {/* Suggested Actions - Scrollable list above input */}
                 <div className="w-full overflow-x-auto pb-2 scrollbar-hide flex gap-2">
-                    {suggestedActions.map((action, i) => (
+                    {currentSuggestions.map((action, i) => (
                         <button
                             key={i}
                             onClick={() => handleSuggestionClick(action.action)}

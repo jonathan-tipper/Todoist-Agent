@@ -56,7 +56,14 @@ When the user has a complex goal (e.g., "I want to learn guitar", "Plan a trip")
 -   Do NOT output text like <function=...> or [addTask(...)].
 -   Do NOT describe the function calls. JUST CALL THEM.
 
-Always be concise, professional, and helpful.`
+Always be concise, professional, and helpful.
+
+**Interactive Suggestions**:
+At the end of your response, if there are logical next steps, use the \`suggestActions\` tool to provide 3-4 short, actionable buttons for the user.
+Examples:
+- After summarizing tasks: "Reschedule low priority", "Plan my afternoon", "Focus on urgent".
+- After a plan is made: "Execute plan", "Modify plan".
+- If user is overwhelmed: "Defer all non-urgent", "Move to tomorrow".`
 
 export async function POST(req: Request) {
     console.log('--- POST /api/chat received ---');
@@ -189,6 +196,20 @@ export async function POST(req: Request) {
                         end: z.string().describe('End time (ISO string)'),
                     }),
                     execute: async ({ summary, start, end }: { summary: string; start: string; end: string }) => calendar.addEvent(summary, start, end),
+                }),
+                suggestActions: tool({
+                    description: 'Suggest follow-up actions to the user based on the current context.',
+                    parameters: z.object({
+                        actions: z.array(z.object({
+                            label: z.string().describe('Short button text, e.g., "Reschedule"'),
+                            action: z.string().describe('The full text to send if clicked, e.g., "Reschedule all low priority tasks to tomorrow"'),
+                            type: z.enum(['search', 'calendar', 'task', 'plan']).describe('Icon type hint'),
+                        })).max(4),
+                    }),
+                    execute: async ({ actions }: { actions: any[] }) => {
+                        console.log('Suggesting actions:', actions);
+                        return { suggested: true, count: actions.length };
+                    },
                 }),
             },
             onFinish: (event) => {
