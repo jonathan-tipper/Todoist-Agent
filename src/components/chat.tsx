@@ -10,6 +10,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/componen
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Send, Bot, User, Loader2, CheckCircle2, Terminal } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AuthWall } from './auth-wall'
 import { ModeToggle } from './mode-toggle'
@@ -17,6 +18,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 export function Chat() {
+    const searchParams = useSearchParams()
     const [selectedModel, setSelectedModel] = useState(process.env.NEXT_PUBLIC_DEFAULT_MODEL || 'llama-3.3-70b')
     const [accessCode, setAccessCode] = useState<string | null>(null)
     const [dynamicSuggestions, setDynamicSuggestions] = useState<any[]>([])
@@ -54,6 +56,22 @@ export function Chat() {
             setAccessCode(savedCode)
         }
     }, [])
+
+    // Handle PWA shortcut actions from manifest
+    useEffect(() => {
+        const action = searchParams.get('action')
+        if (!action || !accessCode) return
+
+        const actionMap: Record<string, string> = {
+            'plan-day': 'Plan my day',
+            'add-task': 'Add a task',
+        }
+
+        const prompt = actionMap[action]
+        if (prompt && messages.length === 0) {
+            setInput(prompt)
+        }
+    }, [searchParams, accessCode, messages.length, setInput])
 
     // Auto-scroll to bottom when messages change
     useEffect(() => {
