@@ -1,4 +1,5 @@
 
+import { Suspense } from 'react'
 import { Chat } from '@/components/chat'
 
 export default function Home() {
@@ -12,7 +13,9 @@ export default function Home() {
       </div>
 
       <div className="flex-1 overflow-hidden relative w-full">
-        <Chat />
+        <Suspense>
+          <Chat />
+        </Suspense>
       </div>
     </main>
   )
