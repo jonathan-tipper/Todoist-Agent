@@ -83,7 +83,10 @@ export const addTask = async (args: AddTaskArgs) => {
             parentId: args.parentId,
             order: args.order,
             labels: args.labels,
-            duration: args.duration,
+            ...(args.duration && {
+                duration: args.duration.amount,
+                durationUnit: args.duration.unit,
+            }),
         })
         return task
     } catch (error) {
@@ -141,7 +144,14 @@ type UpdateTaskArgs = {
 export const updateTask = async (id: string, args: UpdateTaskArgs) => {
     try {
         const todoist = getTodoistClient()
-        const isSuccess = await todoist.updateTask(id, args)
+        const { duration, ...rest } = args
+        const sdkArgs: Record<string, unknown> = { ...rest }
+        if (duration !== undefined) {
+            // null clears the duration; object sets it
+            sdkArgs.duration = duration === null ? null : duration.amount
+            sdkArgs.durationUnit = duration === null ? null : duration.unit
+        }
+        const isSuccess = await todoist.updateTask(id, sdkArgs as any)
         return isSuccess
     } catch (error) {
         console.error('Error updating task:', error)
