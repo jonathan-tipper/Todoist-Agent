@@ -50,6 +50,11 @@ export const addProject = async (name: string) => {
     }
 }
 
+type TaskDuration = {
+    amount: number
+    unit: 'minute' | 'day'
+}
+
 type AddTaskArgs = {
     content: string
     description?: string
@@ -61,6 +66,7 @@ type AddTaskArgs = {
     parentId?: string
     order?: number
     labels?: string[]
+    duration?: TaskDuration
 }
 
 export const addTask = async (args: AddTaskArgs) => {
@@ -77,6 +83,7 @@ export const addTask = async (args: AddTaskArgs) => {
             parentId: args.parentId,
             order: args.order,
             labels: args.labels,
+            duration: args.duration,
         })
         return task
     } catch (error) {
@@ -128,6 +135,7 @@ type UpdateTaskArgs = {
     dueString?: string
     priority?: number
     labels?: string[]
+    duration?: TaskDuration | null
 }
 
 export const updateTask = async (id: string, args: UpdateTaskArgs) => {

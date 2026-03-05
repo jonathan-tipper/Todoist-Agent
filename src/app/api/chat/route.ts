@@ -27,8 +27,8 @@ Your Core Philosophy:
 
 Tools Available:
 - \`getTasks\`: Fetch tasks. Use filters like "today", "tomorrow", "priority 1".
-- \`addTask\`: Create a task. ALWAYS try to set a due date, priority (4=Urgent, 1=Low), and project if possible.
-- \`updateTask\`: Modify tasks (content, date, priority, labels).
+- \`addTask\`: Create a task. ALWAYS try to set a due date, priority (4=Urgent, 1=Low), project, and duration (in minutes or days) if the user mentions how long something will take.
+- \`updateTask\`: Modify tasks (content, date, priority, labels, duration). Pass \`duration: null\` to remove an existing duration.
 - \`moveTask\`: Move a task to a different project.
 - \`closeTask\`: Complete a task.
 - \`getProjects\`: See available projects.
@@ -134,6 +134,10 @@ export async function POST(req: Request) {
                         sectionId: z.string().optional().describe('The section ID to add the task to'),
                         parentId: z.string().optional().describe('The ID of the parent task to create a subtask'),
                         labels: z.array(z.string()).optional().describe('List of label names'),
+                        duration: z.object({
+                            amount: z.number().int().positive().describe('Duration amount, e.g. 30, 90, 2'),
+                            unit: z.enum(['minute', 'day']).describe('Duration unit: "minute" or "day"'),
+                        }).optional().describe('How long the task will take, e.g. { amount: 90, unit: "minute" }'),
                     }),
                     execute: async (args: any) => {
                         console.log('Calling addTask', args)
@@ -159,6 +163,10 @@ export async function POST(req: Request) {
                         dueString: z.string().optional(),
                         priority: z.number().optional(),
                         labels: z.array(z.string()).optional(),
+                        duration: z.object({
+                            amount: z.number().int().positive(),
+                            unit: z.enum(['minute', 'day']),
+                        }).nullable().optional().describe('Set or update task duration. Pass null to remove existing duration.'),
                     }),
                     execute: async ({ id, ...args }: { id: string, [key: string]: any }) => todoist.updateTask(id, args),
                 }),
