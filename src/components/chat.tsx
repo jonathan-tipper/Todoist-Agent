@@ -4,7 +4,7 @@
 import { useChat } from '@ai-sdk/react'
 import Image from 'next/image'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -398,11 +398,17 @@ export function Chat() {
                 </div>
 
                 <form onSubmit={handleSubmit} className="flex w-full gap-2 items-end">
-                    <Input
+                    <Textarea
                         value={input}
                         onChange={handleInputChange}
                         placeholder="Type a message..."
                         className="flex-1 min-h-[44px]"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault()
+                                handleSubmit(e as unknown as React.FormEvent<HTMLFormElement>)
+                            }
+                        }}
                     />
                     <Button type="submit" size="icon" disabled={isLoading} className="h-11 w-11 shrink-0">
                         {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
