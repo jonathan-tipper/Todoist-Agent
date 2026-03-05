@@ -87,7 +87,7 @@ export const addTask = async (args: AddTaskArgs) => {
                 duration: args.duration.amount,
                 durationUnit: args.duration.unit,
             }),
-        })
+        } as any)
         return task
     } catch (error) {
         console.error('Error adding task:', error)
