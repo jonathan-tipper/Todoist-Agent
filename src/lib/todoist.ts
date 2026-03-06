@@ -50,6 +50,11 @@ export const addProject = async (name: string) => {
     }
 }
 
+type TaskDuration = {
+    amount: number
+    unit: 'minute' | 'day'
+}
+
 type AddTaskArgs = {
     content: string
     description?: string
@@ -61,6 +66,7 @@ type AddTaskArgs = {
     parentId?: string
     order?: number
     labels?: string[]
+    duration?: TaskDuration
 }
 
 export const addTask = async (args: AddTaskArgs) => {
@@ -77,7 +83,11 @@ export const addTask = async (args: AddTaskArgs) => {
             parentId: args.parentId,
             order: args.order,
             labels: args.labels,
-        })
+            ...(args.duration && {
+                duration: args.duration.amount,
+                durationUnit: args.duration.unit,
+            }),
+        } as any)
         return task
     } catch (error) {
         console.error('Error adding task:', error)
@@ -128,12 +138,20 @@ type UpdateTaskArgs = {
     dueString?: string
     priority?: number
     labels?: string[]
+    duration?: TaskDuration | null
 }
 
 export const updateTask = async (id: string, args: UpdateTaskArgs) => {
     try {
         const todoist = getTodoistClient()
-        const isSuccess = await todoist.updateTask(id, args)
+        const { duration, ...rest } = args
+        const sdkArgs: Record<string, unknown> = { ...rest }
+        if (duration !== undefined) {
+            // null clears the duration; object sets it
+            sdkArgs.duration = duration === null ? null : duration.amount
+            sdkArgs.durationUnit = duration === null ? null : duration.unit
+        }
+        const isSuccess = await todoist.updateTask(id, sdkArgs as any)
         return isSuccess
     } catch (error) {
         console.error('Error updating task:', error)
