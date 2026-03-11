@@ -17,13 +17,28 @@ export const metadata: Metadata = {
   title: "Todoist Agent",
   description: "AI-powered proactive life planner for Todoist and Google Calendar",
   manifest: "/manifest.json",
+  openGraph: {
+    title: "Todoist Agent",
+    description: "AI-powered proactive life planner for Todoist and Google Calendar",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Todoist Agent",
+    description: "AI-powered proactive life planner for Todoist and Google Calendar",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
     title: "Todoist Agent",
   },
   icons: {
-    apple: "/icons/apple-touch-icon.png",
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: "/apple-icon.png",
+    shortcut: "/icon.svg",
   },
   other: {
     "mobile-web-app-capable": "yes",

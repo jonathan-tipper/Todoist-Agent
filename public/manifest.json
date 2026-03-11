@@ -39,13 +39,27 @@
       "name": "Plan My Day",
       "short_name": "Plan Day",
       "description": "Start a planning session with your AI assistant",
-      "url": "/?action=plan-day"
+      "url": "/?action=plan-day",
+      "icons": [
+        {
+          "src": "/icons/icon-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     },
     {
       "name": "Add Task",
       "short_name": "Add Task",
       "description": "Quickly add a new task",
-      "url": "/?action=add-task"
+      "url": "/?action=add-task",
+      "icons": [
+        {
+          "src": "/icons/icon-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ]
 }
