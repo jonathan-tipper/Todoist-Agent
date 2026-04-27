@@ -16,6 +16,83 @@ const venice = createOpenAI({
     baseURL: 'https://api.venice.ai/api/v1',
 })
 
+const AUTO_OPEN_MODEL_VALUE = '__venice_open_default__'
+const AUTO_MODEL_VALUE = '__venice_default__'
+const VENICE_API_BASE = 'https://api.venice.ai/api/v1'
+const FALLBACK_MODEL = process.env.VENICE_MODEL || 'llama-3.3-70b'
+
+type VeniceModel = {
+    id: string
+    type: string
+    created?: number
+    model_spec?: {
+        modelSource?: string
+        offline?: boolean
+    }
+}
+
+async function resolveModelId(model?: string) {
+    if (model && model !== AUTO_MODEL_VALUE && model !== AUTO_OPEN_MODEL_VALUE) {
+        return model
+    }
+
+    try {
+        const headers = {
+            Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+        }
+
+        if (model === AUTO_OPEN_MODEL_VALUE || !model) {
+            const [modelsResponse, traitsResponse] = await Promise.all([
+                fetch(`${VENICE_API_BASE}/models?type=text`, {
+                    headers,
+                    next: { revalidate: 60 * 60 },
+                }),
+                fetch(`${VENICE_API_BASE}/models/traits?type=text`, {
+                    headers,
+                    next: { revalidate: 15 * 60 },
+                }),
+            ])
+
+            if (!modelsResponse.ok) {
+                throw new Error(`Venice models request failed: ${modelsResponse.status} ${modelsResponse.statusText}`)
+            }
+
+            const modelsPayload = await modelsResponse.json()
+            const traitsPayload = traitsResponse.ok ? await traitsResponse.json() : { data: {} }
+            const defaultModelId = typeof traitsPayload.data?.default === 'string' ? traitsPayload.data.default : null
+            const availableModels: VeniceModel[] = Array.isArray(modelsPayload.data)
+                ? modelsPayload.data.filter((item: VeniceModel) => item.type === 'text' && !item.model_spec?.offline)
+                : []
+            const defaultModel = availableModels.find((item) => item.id === defaultModelId)
+
+            if (defaultModel?.model_spec?.modelSource) {
+                return defaultModel.id
+            }
+
+            const newestOpenModel = availableModels
+                .filter((item) => Boolean(item.model_spec?.modelSource))
+                .sort((a, b) => (b.created || 0) - (a.created || 0))[0]
+
+            return newestOpenModel?.id || defaultModelId || FALLBACK_MODEL
+        }
+
+        const response = await fetch(`${VENICE_API_BASE}/models/traits?type=text`, {
+            headers,
+            next: { revalidate: 15 * 60 },
+        })
+
+        if (!response.ok) {
+            throw new Error(`Venice traits request failed: ${response.status} ${response.statusText}`)
+        }
+
+        const payload = await response.json()
+        return typeof payload.data?.default === 'string' ? payload.data.default : FALLBACK_MODEL
+    } catch (error) {
+        console.error('Failed to resolve Venice model:', error)
+        return FALLBACK_MODEL
+    }
+}
+
 const SYSTEM_PROMPT = `You are a "Proactive Life Planner" AI assistant. Your goal is to help the user organizes their life using Todoist and Google Calendar.
 
 You have access to the user's Todoist tasks/projects and Google Calendar events.
@@ -82,7 +159,7 @@ export async function POST(req: Request) {
         const { messages, model } = await req.json()
         console.log('Messages received:', messages.length);
 
-        const modelId = model || process.env.VENICE_MODEL || 'llama-3.3-70b'
+        const modelId = await resolveModelId(model)
         console.log('Using model:', modelId)
 
         const result = streamText({

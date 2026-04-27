@@ -8,8 +8,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Send, Bot, User, Loader2, CheckCircle2, Terminal } from 'lucide-react'
-import { useState, useEffect, useRef } from 'react'
+import { Send, Bot, User, Loader2, CheckCircle2, Terminal, RefreshCw } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AuthWall } from './auth-wall'
@@ -17,11 +17,67 @@ import { ModeToggle } from './mode-toggle'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+const AUTO_OPEN_MODEL_VALUE = '__venice_open_default__'
+const AUTO_MODEL_VALUE = '__venice_default__'
+const MODEL_PREFERENCE_KEY = 'todoist-agent-model'
+
+type VeniceModelOption = {
+    id: string
+    name: string
+    description: string
+    contextTokens: number | null
+    modelSource: string | null
+    isOpenSource: boolean
+    traits: string[]
+    isDefault: boolean
+    isOpenDefault: boolean
+    supportsFunctionCalling: boolean
+    supportsReasoning: boolean
+    supportsVision: boolean
+}
+
+const fallbackModels: VeniceModelOption[] = [
+    {
+        id: 'llama-3.3-70b',
+        name: 'Llama 3.3 70B',
+        description: 'Fallback model used when the live Venice model catalog is unavailable.',
+        contextTokens: null,
+        modelSource: null,
+        isOpenSource: true,
+        traits: [],
+        isDefault: false,
+        isOpenDefault: true,
+        supportsFunctionCalling: true,
+        supportsReasoning: false,
+        supportsVision: false,
+    },
+    {
+        id: 'venice-uncensored',
+        name: 'Venice Uncensored',
+        description: 'Fallback Venice model used when the live model catalog is unavailable.',
+        contextTokens: null,
+        modelSource: null,
+        isOpenSource: true,
+        traits: [],
+        isDefault: false,
+        isOpenDefault: false,
+        supportsFunctionCalling: false,
+        supportsReasoning: false,
+        supportsVision: false,
+    },
+]
+
 export function Chat() {
     const searchParams = useSearchParams()
-    const [selectedModel, setSelectedModel] = useState(process.env.NEXT_PUBLIC_DEFAULT_MODEL || 'llama-3.3-70b')
+    const [selectedModel, setSelectedModel] = useState(process.env.NEXT_PUBLIC_DEFAULT_MODEL || AUTO_OPEN_MODEL_VALUE)
     const [accessCode, setAccessCode] = useState<string | null>(null)
     const [dynamicSuggestions, setDynamicSuggestions] = useState<any[]>([])
+    const [models, setModels] = useState<VeniceModelOption[]>(fallbackModels)
+    const [defaultModelId, setDefaultModelId] = useState<string | null>(null)
+    const [openDefaultModelId, setOpenDefaultModelId] = useState<string | null>(null)
+    const [modelsUpdatedAt, setModelsUpdatedAt] = useState<string | null>(null)
+    const [isRefreshingModels, setIsRefreshingModels] = useState(false)
+    const [modelError, setModelError] = useState<string | null>(null)
 
     // @ts-ignore
     const { messages, input, setInput, handleInputChange, handleSubmit, isLoading, error, reload } = useChat({
@@ -55,7 +111,63 @@ export function Chat() {
         if (savedCode) {
             setAccessCode(savedCode)
         }
+
+        const savedModel = localStorage.getItem(MODEL_PREFERENCE_KEY)
+        if (savedModel) {
+            setSelectedModel(savedModel)
+        }
     }, [])
+
+    useEffect(() => {
+        localStorage.setItem(MODEL_PREFERENCE_KEY, selectedModel)
+    }, [selectedModel])
+
+    const refreshModels = useCallback(async () => {
+        if (!accessCode) return
+
+        setIsRefreshingModels(true)
+        setModelError(null)
+
+        try {
+            const response = await fetch('/api/venice-models', {
+                headers: {
+                    Authorization: `Bearer ${accessCode}`,
+                },
+            })
+
+            if (response.status === 401) {
+                setAccessCode(null)
+                localStorage.removeItem('todoist-agent-auth')
+                return
+            }
+
+            if (!response.ok) {
+                throw new Error(`Unable to load Venice models (${response.status})`)
+            }
+
+            const data = await response.json()
+            if (!Array.isArray(data.models) || data.models.length === 0) {
+                throw new Error('Venice returned no text models')
+            }
+
+            setModels(data.models)
+            setDefaultModelId(data.defaultModelId || null)
+            setOpenDefaultModelId(data.openDefaultModelId || null)
+            setModelsUpdatedAt(data.updatedAt || null)
+        } catch (error) {
+            console.error('Model refresh failed:', error)
+            setModelError(error instanceof Error ? error.message : 'Unable to load Venice models')
+        } finally {
+            setIsRefreshingModels(false)
+        }
+    }, [accessCode])
+
+    useEffect(() => {
+        refreshModels()
+        const refreshInterval = window.setInterval(refreshModels, 60 * 60 * 1000)
+
+        return () => window.clearInterval(refreshInterval)
+    }, [refreshModels])
 
     // Handle PWA shortcut actions from manifest
     useEffect(() => {
@@ -135,39 +247,14 @@ export function Chat() {
         setInput(action)
     }
 
-    const models = [
-        { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
-        { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
-        { id: 'openai-gpt-52', name: 'GPT 5.2 (Venice)' },
-        { id: 'venice-uncensored', name: 'Venice Uncensored' },
-        { id: 'claude-sonnet-45', name: 'Claude Sonnet 4.5' },
-        { id: 'claude-opus-45', name: 'Claude Opus 4.5' },
-        { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro' },
-        { id: 'grok-41-fast', name: 'Grok 4.1 Fast' },
-        { id: 'hermes-3-llama-3.1-405b', name: 'Hermes 3 (Llama 3.1 405B)' },
-        { id: 'mistral-31-24b', name: 'Mistral 3.1 24B' },
-        { id: 'qwen3-235b-a22b-instruct-2507', name: 'Qwen 3 235B Instruct' },
-        { id: 'zai-org-glm-4.7', name: 'GLM 4.7' },
-        // Others
-        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-        { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash' },
-        { id: 'google-gemma-3-27b-it', name: 'Gemma 3 27B' },
-        { id: 'grok-code-fast-1', name: 'Grok Code Fast 1' },
-        { id: 'kimi-k2-5', name: 'Kimi K2.5' },
-        { id: 'kimi-k2-thinking', name: 'Kimi K2 Thinking' },
-        { id: 'llama-3.2-3b', name: 'Llama 3.2 3B' },
-        { id: 'minimax-m21', name: 'Minimax M2.1' },
-        { id: 'minimax-m25', name: 'Minimax M2.5' },
-        { id: 'openai-gpt-52-codex', name: 'GPT 5.2 Codex' },
-        { id: 'openai-gpt-oss-120b', name: 'GPT OSS 120B' },
-        { id: 'qwen3-235b-a22b-thinking-2507', name: 'Qwen 3 235B Thinking' },
-        { id: 'qwen3-4b', name: 'Qwen 3 4B' },
-        { id: 'qwen3-coder-480b-a35b-instruct', name: 'Qwen 3 Coder 480B' },
-        { id: 'qwen3-next-80b', name: 'Qwen 3 Next 80B' },
-        { id: 'qwen3-vl-235b-a22b', name: 'Qwen 3 VL 235B' },
-        { id: 'zai-org-glm-4.7-flash', name: 'GLM 4.7 Flash' },
-        { id: 'zai-org-glm-5', name: 'GLM 5' },
-    ]
+    const selectedModelIsAvailable = selectedModel === AUTO_MODEL_VALUE || selectedModel === AUTO_OPEN_MODEL_VALUE || models.some((model) => model.id === selectedModel)
+    const defaultModelName = models.find((model) => model.id === defaultModelId)?.name || defaultModelId
+    const openDefaultModelName = models.find((model) => model.id === openDefaultModelId)?.name || openDefaultModelId
+    const modelStatusText = modelError
+        ? modelError
+        : modelsUpdatedAt
+            ? `Updated ${new Date(modelsUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+            : 'Live Venice models'
 
     return (
         <Card className="flex flex-col h-full w-full border-0 rounded-none shadow-none bg-background">
@@ -186,17 +273,69 @@ export function Chat() {
                     </div>
                     <div className="flex items-center gap-2">
                         <Select value={selectedModel} onValueChange={setSelectedModel}>
-                            <SelectTrigger className="w-[180px] h-8 text-xs">
+                            <SelectTrigger className="w-[220px] h-8 text-xs">
                                 <SelectValue placeholder="Select model" />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent className="max-w-[340px]">
+                                <SelectItem value={AUTO_OPEN_MODEL_VALUE} className="text-xs">
+                                    <div className="flex flex-col">
+                                        <span>Auto: Best open model</span>
+                                        {openDefaultModelName && (
+                                            <span className="text-[10px] text-muted-foreground">
+                                                Currently {openDefaultModelName}
+                                            </span>
+                                        )}
+                                    </div>
+                                </SelectItem>
+                                <SelectItem value={AUTO_MODEL_VALUE} className="text-xs">
+                                    <div className="flex flex-col">
+                                        <span>Auto: Venice default</span>
+                                        {defaultModelName && (
+                                            <span className="text-[10px] text-muted-foreground">
+                                                Currently {defaultModelName}
+                                            </span>
+                                        )}
+                                    </div>
+                                </SelectItem>
+                                {!selectedModelIsAvailable && (
+                                    <SelectItem value={selectedModel} className="text-xs">
+                                        Saved model: {selectedModel}
+                                    </SelectItem>
+                                )}
                                 {models.map((model) => (
                                     <SelectItem key={model.id} value={model.id} className="text-xs">
-                                        {model.name}
+                                        <div className="flex flex-col">
+                                            <span>
+                                                {model.name}
+                                                {model.isDefault ? ' · Venice default' : ''}
+                                                {model.isOpenDefault && !model.isDefault ? ' · open default' : ''}
+                                            </span>
+                                            <span className="text-[10px] text-muted-foreground">
+                                                {[
+                                                    model.isOpenSource ? 'open' : null,
+                                                    model.supportsReasoning ? 'reasoning' : null,
+                                                    model.supportsFunctionCalling ? 'tools' : null,
+                                                    model.supportsVision ? 'vision' : null,
+                                                    model.contextTokens ? `${model.contextTokens.toLocaleString()} ctx` : null,
+                                                ].filter(Boolean).join(' · ') || model.id}
+                                            </span>
+                                        </div>
                                     </SelectItem>
                                 ))}
                             </SelectContent>
                         </Select>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            onClick={refreshModels}
+                            disabled={isRefreshingModels}
+                            title={modelStatusText}
+                            aria-label="Refresh Venice models"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${isRefreshingModels ? 'animate-spin' : ''}`} />
+                        </Button>
                         <ModeToggle />
                     </div>
                 </CardTitle>
