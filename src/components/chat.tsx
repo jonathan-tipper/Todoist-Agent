@@ -2,13 +2,14 @@
 'use client'
 
 import { useChat } from '@ai-sdk/react'
+import type { Message } from '@ai-sdk/react'
 import Image from 'next/image'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Send, Bot, User, Loader2, CheckCircle2, Terminal, RefreshCw } from 'lucide-react'
+import { Send, Bot, User, Loader2, CheckCircle2, Terminal, RefreshCw, History, MessageSquare, Plus, Trash2 } from 'lucide-react'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -20,6 +21,17 @@ import remarkGfm from 'remark-gfm'
 const AUTO_OPEN_MODEL_VALUE = '__venice_open_default__'
 const AUTO_MODEL_VALUE = '__venice_default__'
 const MODEL_PREFERENCE_KEY = 'todoist-agent-model'
+const HISTORY_LIMIT = 20
+const MESSAGE_LIMIT = 80
+
+type SavedThread = {
+    id: string
+    title: string
+    createdAt: string
+    updatedAt: string
+    model: string
+    messages: Message[]
+}
 
 type VeniceModelOption = {
     id: string
@@ -67,6 +79,71 @@ const fallbackModels: VeniceModelOption[] = [
     },
 ]
 
+function createThreadId() {
+    return `thread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function getChatHistoryKey(accessCode: string) {
+    let hash = 0
+    for (let i = 0; i < accessCode.length; i += 1) {
+        hash = Math.imul(31, hash) + accessCode.charCodeAt(i) | 0
+    }
+
+    return `todoist-agent-chat-history:${Math.abs(hash).toString(36)}`
+}
+
+function reviveMessages(messages: Message[]) {
+    return messages.map((message) => ({
+        ...message,
+        createdAt: message.createdAt ? new Date(message.createdAt) : undefined,
+    }))
+}
+
+function parseThreads(rawHistory: string | null): SavedThread[] {
+    if (!rawHistory) return []
+
+    try {
+        const parsed = JSON.parse(rawHistory)
+        if (!Array.isArray(parsed)) return []
+
+        return parsed
+            .filter((thread): thread is SavedThread => (
+                typeof thread?.id === 'string'
+                && typeof thread?.title === 'string'
+                && Array.isArray(thread?.messages)
+            ))
+            .map((thread) => ({
+                ...thread,
+                messages: reviveMessages(thread.messages),
+            }))
+            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+            .slice(0, HISTORY_LIMIT)
+    } catch (error) {
+        console.error('Unable to parse saved chat history:', error)
+        return []
+    }
+}
+
+function titleFromMessages(messages: Message[]) {
+    const firstUserMessage = messages.find((message) => message.role === 'user' && message.content.trim())
+    if (!firstUserMessage) return 'New chat'
+
+    const title = firstUserMessage.content.replace(/\s+/g, ' ').trim()
+    return title.length > 48 ? `${title.slice(0, 45)}...` : title
+}
+
+function formatThreadTime(value: string) {
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return ''
+
+    return date.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    })
+}
+
 export function Chat() {
     const searchParams = useSearchParams()
     const [selectedModel, setSelectedModel] = useState(process.env.NEXT_PUBLIC_DEFAULT_MODEL || AUTO_OPEN_MODEL_VALUE)
@@ -78,9 +155,14 @@ export function Chat() {
     const [modelsUpdatedAt, setModelsUpdatedAt] = useState<string | null>(null)
     const [isRefreshingModels, setIsRefreshingModels] = useState(false)
     const [modelError, setModelError] = useState<string | null>(null)
+    const [historyKey, setHistoryKey] = useState<string | null>(null)
+    const [threads, setThreads] = useState<SavedThread[]>([])
+    const [activeThreadId, setActiveThreadId] = useState(() => createThreadId())
+    const [hasLoadedHistory, setHasLoadedHistory] = useState(false)
+    const [isHistoryOpen, setIsHistoryOpen] = useState(true)
 
     // @ts-ignore
-    const { messages, input, setInput, handleInputChange, handleSubmit, isLoading, error, reload } = useChat({
+    const { messages, setMessages, input, setInput, handleInputChange, handleSubmit, isLoading, error, reload } = useChat({
         body: {
             model: selectedModel
         },
@@ -121,6 +203,55 @@ export function Chat() {
     useEffect(() => {
         localStorage.setItem(MODEL_PREFERENCE_KEY, selectedModel)
     }, [selectedModel])
+
+    useEffect(() => {
+        if (!accessCode) return
+
+        const nextHistoryKey = getChatHistoryKey(accessCode)
+        const nextThreads = parseThreads(localStorage.getItem(nextHistoryKey))
+        const latestThread = nextThreads[0]
+
+        setHistoryKey(nextHistoryKey)
+        setThreads(nextThreads)
+        setHasLoadedHistory(true)
+
+        if (latestThread) {
+            setActiveThreadId(latestThread.id)
+            setSelectedModel(latestThread.model || process.env.NEXT_PUBLIC_DEFAULT_MODEL || AUTO_OPEN_MODEL_VALUE)
+            setMessages(latestThread.messages)
+        } else {
+            setActiveThreadId(createThreadId())
+            setMessages([])
+        }
+    }, [accessCode, setMessages])
+
+    useEffect(() => {
+        if (!historyKey || !hasLoadedHistory || messages.length === 0) return
+
+        const now = new Date().toISOString()
+        setThreads((previousThreads) => {
+            const existingThread = previousThreads.find((thread) => thread.id === activeThreadId)
+            const nextThread: SavedThread = {
+                id: activeThreadId,
+                title: titleFromMessages(messages),
+                createdAt: existingThread?.createdAt || now,
+                updatedAt: now,
+                model: selectedModel,
+                messages: messages.slice(-MESSAGE_LIMIT),
+            }
+
+            return [
+                nextThread,
+                ...previousThreads.filter((thread) => thread.id !== activeThreadId),
+            ].slice(0, HISTORY_LIMIT)
+        })
+    }, [activeThreadId, hasLoadedHistory, historyKey, messages, selectedModel])
+
+    useEffect(() => {
+        if (!historyKey || !hasLoadedHistory) return
+
+        localStorage.setItem(historyKey, JSON.stringify(threads))
+    }, [hasLoadedHistory, historyKey, threads])
 
     const refreshModels = useCallback(async () => {
         if (!accessCode) return
@@ -243,6 +374,41 @@ export function Chat() {
 
     const currentSuggestions = dynamicSuggestions.length > 0 ? dynamicSuggestions : defaultSuggestions
 
+    const startNewThread = () => {
+        setActiveThreadId(createThreadId())
+        setMessages([])
+        setInput('')
+        setDynamicSuggestions([])
+    }
+
+    const loadThread = (thread: SavedThread) => {
+        setActiveThreadId(thread.id)
+        setSelectedModel(thread.model || AUTO_OPEN_MODEL_VALUE)
+        setMessages(reviveMessages(thread.messages))
+        setInput('')
+        setDynamicSuggestions([])
+    }
+
+    const deleteThread = (threadId: string) => {
+        setThreads((previousThreads) => {
+            const nextThreads = previousThreads.filter((thread) => thread.id !== threadId)
+
+            if (threadId === activeThreadId) {
+                const nextActiveThread = nextThreads[0]
+                if (nextActiveThread) {
+                    setActiveThreadId(nextActiveThread.id)
+                    setSelectedModel(nextActiveThread.model || AUTO_OPEN_MODEL_VALUE)
+                    setMessages(reviveMessages(nextActiveThread.messages))
+                } else {
+                    setActiveThreadId(createThreadId())
+                    setMessages([])
+                }
+            }
+
+            return nextThreads
+        })
+    }
+
     const handleSuggestionClick = (action: string) => {
         setInput(action)
     }
@@ -261,6 +427,17 @@ export function Chat() {
             <CardHeader>
                 <CardTitle className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            onClick={() => setIsHistoryOpen((open) => !open)}
+                            aria-label="Toggle chat history"
+                            title="Chat history"
+                        >
+                            <History className="w-4 h-4" />
+                        </Button>
                         <div className="relative w-8 h-8">
                             <Image
                                 src="/logo.svg"
@@ -272,6 +449,16 @@ export function Chat() {
                         <span className="font-bold text-lg tracking-tight">Todoist Agent</span>
                     </div>
                     <div className="flex items-center gap-2">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 gap-2 text-xs"
+                            onClick={startNewThread}
+                        >
+                            <Plus className="w-4 h-4" />
+                            New
+                        </Button>
                         <Select value={selectedModel} onValueChange={setSelectedModel}>
                             <SelectTrigger className="w-[220px] h-8 text-xs">
                                 <SelectValue placeholder="Select model" />
@@ -341,7 +528,67 @@ export function Chat() {
                 </CardTitle>
             </CardHeader>
             <CardContent className="flex-1 overflow-hidden p-0 relative">
-                <ScrollArea className="h-full p-4">
+                <div className="flex h-full min-h-0">
+                    {isHistoryOpen && (
+                        <aside className="absolute inset-y-0 left-0 z-20 flex w-72 shrink-0 flex-col border-r bg-background shadow-lg md:relative md:shadow-none md:bg-muted/20">
+                            <div className="flex items-center justify-between border-b px-3 py-2">
+                                <div className="flex items-center gap-2 text-sm font-medium">
+                                    <MessageSquare className="w-4 h-4" />
+                                    History
+                                </div>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    onClick={startNewThread}
+                                    aria-label="Start new chat"
+                                >
+                                    <Plus className="w-4 h-4" />
+                                </Button>
+                            </div>
+                            <ScrollArea className="flex-1">
+                                <div className="flex flex-col gap-1 p-2">
+                                    {threads.length === 0 && (
+                                        <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+                                            No saved chats yet.
+                                        </div>
+                                    )}
+                                    {threads.map((thread) => (
+                                        <div
+                                            key={thread.id}
+                                            className={`group flex items-start gap-1 rounded-md px-2 py-2 ${thread.id === activeThreadId ? 'bg-muted' : 'hover:bg-muted/60'}`}
+                                        >
+                                            <button
+                                                type="button"
+                                                className="min-w-0 flex-1 text-left"
+                                                onClick={() => loadThread(thread)}
+                                            >
+                                                <div className="truncate text-xs font-medium text-foreground">
+                                                    {thread.title}
+                                                </div>
+                                                <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                                                    {formatThreadTime(thread.updatedAt)}
+                                                </div>
+                                            </button>
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100"
+                                                onClick={() => deleteThread(thread.id)}
+                                                aria-label={`Delete ${thread.title}`}
+                                            >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                            </Button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </ScrollArea>
+                        </aside>
+                    )}
+                    <div className="flex min-w-0 flex-1 flex-col">
+                        <ScrollArea className="flex-1 p-4">
                     <div className="flex flex-col gap-4 pb-4">
                         {messages.length === 0 && (
                             <div className="text-center text-muted-foreground mt-20 px-6">
@@ -517,43 +764,43 @@ export function Chat() {
                         )}
                         <div ref={scrollRef} />
                     </div>
-                </ScrollArea>
+                        </ScrollArea>
+                        <CardFooter className="p-4 border-t bg-background/50 backdrop-blur-sm flex flex-col gap-3">
+                            {/* Suggested Actions - Scrollable list above input */}
+                            <div className="w-full overflow-x-auto pb-2 scrollbar-hide flex gap-2">
+                                {currentSuggestions.map((action, i) => (
+                                    <button
+                                        key={i}
+                                        onClick={() => handleSuggestionClick(action.action)}
+                                        className="flex items-center gap-2 whitespace-nowrap bg-background border border-border/50 hover:bg-muted/50 transition-colors rounded-full px-3 py-1.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+                                    >
+                                        {action.icon}
+                                        {action.label}
+                                    </button>
+                                ))}
+                            </div>
 
-
-            </CardContent>
-            <CardFooter className="p-4 border-t bg-background/50 backdrop-blur-sm flex flex-col gap-3">
-                {/* Suggested Actions - Scrollable list above input */}
-                <div className="w-full overflow-x-auto pb-2 scrollbar-hide flex gap-2">
-                    {currentSuggestions.map((action, i) => (
-                        <button
-                            key={i}
-                            onClick={() => handleSuggestionClick(action.action)}
-                            className="flex items-center gap-2 whitespace-nowrap bg-background border border-border/50 hover:bg-muted/50 transition-colors rounded-full px-3 py-1.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-                        >
-                            {action.icon}
-                            {action.label}
-                        </button>
-                    ))}
+                            <form onSubmit={handleSubmit} className="flex w-full gap-2 items-end">
+                                <Textarea
+                                    value={input}
+                                    onChange={handleInputChange}
+                                    placeholder="Type a message..."
+                                    className="flex-1 min-h-[44px]"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault()
+                                            handleSubmit(e as unknown as React.FormEvent<HTMLFormElement>)
+                                        }
+                                    }}
+                                />
+                                <Button type="submit" size="icon" disabled={isLoading} className="h-11 w-11 shrink-0">
+                                    {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                                </Button>
+                            </form>
+                        </CardFooter>
+                    </div>
                 </div>
-
-                <form onSubmit={handleSubmit} className="flex w-full gap-2 items-end">
-                    <Textarea
-                        value={input}
-                        onChange={handleInputChange}
-                        placeholder="Type a message..."
-                        className="flex-1 min-h-[44px]"
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault()
-                                handleSubmit(e as unknown as React.FormEvent<HTMLFormElement>)
-                            }
-                        }}
-                    />
-                    <Button type="submit" size="icon" disabled={isLoading} className="h-11 w-11 shrink-0">
-                        {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                    </Button>
-                </form>
-            </CardFooter>
+            </CardContent>
         </Card>
     )
 }
