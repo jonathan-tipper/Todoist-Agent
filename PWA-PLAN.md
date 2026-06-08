@@ -1,5 +1,7 @@
 # PWA Conversion Plan: Todoist Agent
 
+> Status note: this was the original conversion plan. The repository now includes a manifest, generated icons, offline route, and `@ducanh2912/next-pwa` configuration. Keep this file as planning history unless it is refreshed into a current PWA audit.
+
 ## Current State Assessment
 
 **PWA readiness: None.** The application has zero PWA features implemented today:

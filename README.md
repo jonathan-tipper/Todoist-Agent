@@ -88,6 +88,8 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000), enter your `ACCESS_CODE`, and start chatting.
 
+`npm run dev` runs Next.js with webpack explicitly because the current PWA plugin injects webpack configuration and Next.js 16 enables Turbopack by default.
+
 ### Build for production
 
 ```bash
@@ -96,6 +98,22 @@ npm start
 ```
 
 Deploy to any Node.js host (Vercel, Railway, Fly.io, etc.). Set the environment variables in your hosting provider's dashboard.
+
+## Verification
+
+```bash
+npm run lint
+npm run typecheck
+npm run test
+npm run test:e2e
+npm run eval
+npm run build
+```
+
+- Unit tests cover chat history persistence, API request validation, and mocked agent eval scoring.
+- E2E tests seed browser storage and mock `/api/venice-models`; they do not call Venice, Todoist, Google, or local secrets.
+- `npm run eval` runs deterministic mocked agent behavior cases from `evals/agent-behavior.cases.json`.
+- Live integration scripts under `scripts/` are manual diagnostics and may call external services; do not run them in CI by default.
 
 ## Project structure
 

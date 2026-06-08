@@ -8,30 +8,28 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Send, Bot, User, Loader2, CheckCircle2, Terminal, RefreshCw, History, MessageSquare, Plus, Trash2 } from 'lucide-react'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AuthWall } from './auth-wall'
 import { ModeToggle } from './mode-toggle'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import {
+    buildThreadList,
+    createThreadId,
+    getChatHistoryKey,
+    parseThreads,
+    reviveMessages,
+    saveThreads,
+    type SavedThread,
+} from '@/lib/chat-history'
 
 const AUTO_OPEN_MODEL_VALUE = '__venice_open_default__'
 const AUTO_MODEL_VALUE = '__venice_default__'
 const MODEL_PREFERENCE_KEY = 'todoist-agent-model'
-const HISTORY_LIMIT = 20
-const MESSAGE_LIMIT = 80
-
-type SavedThread = {
-    id: string
-    title: string
-    createdAt: string
-    updatedAt: string
-    model: string
-    messages: Message[]
-}
 
 type VeniceModelOption = {
     id: string
@@ -46,6 +44,59 @@ type VeniceModelOption = {
     supportsFunctionCalling: boolean
     supportsReasoning: boolean
     supportsVision: boolean
+}
+
+type SuggestionType = 'search' | 'calendar' | 'task' | 'plan'
+
+type SuggestedAction = {
+    label: string
+    action: string
+    type: SuggestionType
+}
+
+type DynamicSuggestion = {
+    label: string
+    action: string
+    icon: ReactNode
+}
+
+type ToolInvocation = {
+    toolCallId?: string
+    toolName: string
+    state: string
+    args?: unknown
+    result?: unknown
+}
+
+type SuggestActionsInvocation = ToolInvocation & {
+    toolName: 'suggestActions'
+    state: 'result'
+    args: {
+        actions: SuggestedAction[]
+    }
+}
+
+type MessageWithToolInvocations = Message & {
+    toolInvocations?: ToolInvocation[]
+}
+
+function isSuggestedAction(value: unknown): value is SuggestedAction {
+    if (!value || typeof value !== 'object') return false
+
+    const action = value as Record<string, unknown>
+    return (
+        typeof action.label === 'string'
+        && typeof action.action === 'string'
+        && (action.type === 'search' || action.type === 'calendar' || action.type === 'task' || action.type === 'plan')
+    )
+}
+
+function isSuggestActionsInvocation(value: ToolInvocation): value is SuggestActionsInvocation {
+    if (value.toolName !== 'suggestActions' || value.state !== 'result') return false
+    if (!value.args || typeof value.args !== 'object') return false
+
+    const args = value.args as Record<string, unknown>
+    return Array.isArray(args.actions) && args.actions.every(isSuggestedAction)
 }
 
 const fallbackModels: VeniceModelOption[] = [
@@ -79,59 +130,6 @@ const fallbackModels: VeniceModelOption[] = [
     },
 ]
 
-function createThreadId() {
-    return `thread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-}
-
-function getChatHistoryKey(accessCode: string) {
-    let hash = 0
-    for (let i = 0; i < accessCode.length; i += 1) {
-        hash = Math.imul(31, hash) + accessCode.charCodeAt(i) | 0
-    }
-
-    return `todoist-agent-chat-history:${Math.abs(hash).toString(36)}`
-}
-
-function reviveMessages(messages: Message[]) {
-    return messages.map((message) => ({
-        ...message,
-        createdAt: message.createdAt ? new Date(message.createdAt) : undefined,
-    }))
-}
-
-function parseThreads(rawHistory: string | null): SavedThread[] {
-    if (!rawHistory) return []
-
-    try {
-        const parsed = JSON.parse(rawHistory)
-        if (!Array.isArray(parsed)) return []
-
-        return parsed
-            .filter((thread): thread is SavedThread => (
-                typeof thread?.id === 'string'
-                && typeof thread?.title === 'string'
-                && Array.isArray(thread?.messages)
-            ))
-            .map((thread) => ({
-                ...thread,
-                messages: reviveMessages(thread.messages),
-            }))
-            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-            .slice(0, HISTORY_LIMIT)
-    } catch (error) {
-        console.error('Unable to parse saved chat history:', error)
-        return []
-    }
-}
-
-function titleFromMessages(messages: Message[]) {
-    const firstUserMessage = messages.find((message) => message.role === 'user' && message.content.trim())
-    if (!firstUserMessage) return 'New chat'
-
-    const title = firstUserMessage.content.replace(/\s+/g, ' ').trim()
-    return title.length > 48 ? `${title.slice(0, 45)}...` : title
-}
-
 function formatThreadTime(value: string) {
     const date = new Date(value)
     if (Number.isNaN(date.getTime())) return ''
@@ -148,7 +146,7 @@ export function Chat() {
     const searchParams = useSearchParams()
     const [selectedModel, setSelectedModel] = useState(process.env.NEXT_PUBLIC_DEFAULT_MODEL || AUTO_OPEN_MODEL_VALUE)
     const [accessCode, setAccessCode] = useState<string | null>(null)
-    const [dynamicSuggestions, setDynamicSuggestions] = useState<any[]>([])
+    const [dynamicSuggestions, setDynamicSuggestions] = useState<DynamicSuggestion[]>([])
     const [models, setModels] = useState<VeniceModelOption[]>(fallbackModels)
     const [defaultModelId, setDefaultModelId] = useState<string | null>(null)
     const [openDefaultModelId, setOpenDefaultModelId] = useState<string | null>(null)
@@ -159,9 +157,8 @@ export function Chat() {
     const [threads, setThreads] = useState<SavedThread[]>([])
     const [activeThreadId, setActiveThreadId] = useState(() => createThreadId())
     const [hasLoadedHistory, setHasLoadedHistory] = useState(false)
-    const [isHistoryOpen, setIsHistoryOpen] = useState(true)
+    const [isHistoryOpen, setIsHistoryOpen] = useState(false)
 
-    // @ts-ignore
     const { messages, setMessages, input, setInput, handleInputChange, handleSubmit, isLoading, error, reload } = useChat({
         body: {
             model: selectedModel
@@ -201,6 +198,10 @@ export function Chat() {
     }, [])
 
     useEffect(() => {
+        setIsHistoryOpen(window.matchMedia('(min-width: 768px)').matches)
+    }, [])
+
+    useEffect(() => {
         localStorage.setItem(MODEL_PREFERENCE_KEY, selectedModel)
     }, [selectedModel])
 
@@ -228,29 +229,20 @@ export function Chat() {
     useEffect(() => {
         if (!historyKey || !hasLoadedHistory || messages.length === 0) return
 
-        const now = new Date().toISOString()
         setThreads((previousThreads) => {
-            const existingThread = previousThreads.find((thread) => thread.id === activeThreadId)
-            const nextThread: SavedThread = {
-                id: activeThreadId,
-                title: titleFromMessages(messages),
-                createdAt: existingThread?.createdAt || now,
-                updatedAt: now,
-                model: selectedModel,
-                messages: messages.slice(-MESSAGE_LIMIT),
-            }
-
-            return [
-                nextThread,
-                ...previousThreads.filter((thread) => thread.id !== activeThreadId),
-            ].slice(0, HISTORY_LIMIT)
+            return buildThreadList({
+                activeThreadId,
+                previousThreads,
+                messages,
+                selectedModel,
+            })
         })
     }, [activeThreadId, hasLoadedHistory, historyKey, messages, selectedModel])
 
     useEffect(() => {
         if (!historyKey || !hasLoadedHistory) return
 
-        localStorage.setItem(historyKey, JSON.stringify(threads))
+        saveThreads(localStorage, historyKey, threads)
     }, [hasLoadedHistory, historyKey, threads])
 
     const refreshModels = useCallback(async () => {
@@ -331,15 +323,14 @@ export function Chat() {
         const lastMessage = messages[messages.length - 1]
         if (lastMessage.role !== 'assistant') return
 
-        // Check for suggestActions tool call
-        // @ts-ignore
-        const toolCalls = lastMessage.toolInvocations || []
-        const suggestActionCall = toolCalls.find((t: any) => t.toolName === 'suggestActions' && t.state === 'result')
+        const messageWithTools = lastMessage as MessageWithToolInvocations
+        const toolCalls = messageWithTools.toolInvocations || []
+        const suggestActionCall = toolCalls.find(isSuggestActionsInvocation)
 
         if (suggestActionCall) {
             const actions = suggestActionCall.args.actions
-            if (actions && Array.isArray(actions)) {
-                setDynamicSuggestions(actions.map((a: any) => ({
+            if (actions.length > 0) {
+                setDynamicSuggestions(actions.map((a) => ({
                     label: a.label,
                     action: a.action,
                     icon: getIconForType(a.type)
@@ -363,7 +354,7 @@ export function Chat() {
         return <AuthWall onAuthenticated={setAccessCode} />
     }
 
-    const defaultSuggestions = [
+    const defaultSuggestions: DynamicSuggestion[] = [
         { label: "Plan my day", action: "Plan my day", icon: <CheckCircle2 className="w-4 h-4" /> },
         { label: "Add task", action: "Add a task to buy milk", icon: <Send className="w-4 h-4" /> },
         { label: "Check calendar", action: "What do I have today?", icon: <Bot className="w-4 h-4" /> },
@@ -387,6 +378,9 @@ export function Chat() {
         setMessages(reviveMessages(thread.messages))
         setInput('')
         setDynamicSuggestions([])
+        if (window.innerWidth < 768) {
+            setIsHistoryOpen(false)
+        }
     }
 
     const deleteThread = (threadId: string) => {
@@ -423,10 +417,10 @@ export function Chat() {
             : 'Live Venice models'
 
     return (
-        <Card className="flex flex-col h-full w-full border-0 rounded-none shadow-none bg-background">
-            <CardHeader>
-                <CardTitle className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+        <Card className="flex h-full min-h-0 w-full flex-col gap-0 rounded-none border-0 bg-background py-0 shadow-none">
+            <CardHeader className="flex-none border-b px-3 py-2 sm:px-4">
+                <CardTitle className="flex min-w-0 flex-col gap-2 leading-none font-semibold sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-2">
                         <Button
                             type="button"
                             variant="ghost"
@@ -434,6 +428,7 @@ export function Chat() {
                             className="h-8 w-8 shrink-0"
                             onClick={() => setIsHistoryOpen((open) => !open)}
                             aria-label="Toggle chat history"
+                            aria-expanded={isHistoryOpen}
                             title="Chat history"
                         >
                             <History className="w-4 h-4" />
@@ -446,21 +441,21 @@ export function Chat() {
                                 className="object-contain drop-shadow-[0_0_8px_rgba(239,68,68,0.5)]"
                             />
                         </div>
-                        <span className="font-bold text-lg tracking-tight">Todoist Agent</span>
+                        <span className="truncate text-lg font-bold tracking-tight">Todoist Agent</span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
                         <Button
                             type="button"
                             variant="ghost"
                             size="sm"
-                            className="h-8 gap-2 text-xs"
+                            className="h-8 gap-2 px-2 text-xs sm:px-3"
                             onClick={startNewThread}
                         >
                             <Plus className="w-4 h-4" />
-                            New
+                            <span className="hidden sm:inline">New</span>
                         </Button>
                         <Select value={selectedModel} onValueChange={setSelectedModel}>
-                            <SelectTrigger className="w-[220px] h-8 text-xs">
+                            <SelectTrigger className="h-8 min-w-0 flex-1 text-xs sm:w-[220px] sm:flex-none">
                                 <SelectValue placeholder="Select model" />
                             </SelectTrigger>
                             <SelectContent className="max-w-[340px]">
@@ -527,10 +522,18 @@ export function Chat() {
                     </div>
                 </CardTitle>
             </CardHeader>
-            <CardContent className="flex-1 overflow-hidden p-0 relative">
-                <div className="flex h-full min-h-0">
+            <CardContent className="relative min-h-0 flex-1 overflow-hidden p-0">
+                <div className="flex h-full min-h-0 overflow-hidden">
                     {isHistoryOpen && (
-                        <aside className="absolute inset-y-0 left-0 z-20 flex w-72 shrink-0 flex-col border-r bg-background shadow-lg md:relative md:shadow-none md:bg-muted/20">
+                        <button
+                            type="button"
+                            className="absolute inset-0 z-10 bg-background/60 backdrop-blur-sm md:hidden"
+                            onClick={() => setIsHistoryOpen(false)}
+                            aria-label="Close chat history"
+                        />
+                    )}
+                    {isHistoryOpen && (
+                        <aside className="absolute inset-y-0 left-0 z-20 flex w-[min(18rem,calc(100vw-3rem))] shrink-0 flex-col border-r bg-background shadow-lg md:relative md:w-72 md:shadow-none md:bg-muted/20">
                             <div className="flex items-center justify-between border-b px-3 py-2">
                                 <div className="flex items-center gap-2 text-sm font-medium">
                                     <MessageSquare className="w-4 h-4" />
@@ -587,9 +590,9 @@ export function Chat() {
                             </ScrollArea>
                         </aside>
                     )}
-                    <div className="flex min-w-0 flex-1 flex-col">
-                        <ScrollArea className="flex-1 p-4">
-                    <div className="flex flex-col gap-4 pb-4">
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                        <ScrollArea className="min-h-0 flex-1">
+                    <div className="flex min-w-0 flex-col gap-4 p-4 pb-4">
                         {messages.length === 0 && (
                             <div className="text-center text-muted-foreground mt-20 px-6">
                                 <Avatar className="h-16 w-16 mx-auto mb-4 bg-primary/10">
@@ -599,30 +602,33 @@ export function Chat() {
                                 <p className="text-sm">I can manage your Todoist tasks and check your Google Calendar.</p>
                             </div>
                         )}
-                        {messages.map((m: any) => (
+                        {messages.map((message) => {
+                            const m = message as MessageWithToolInvocations
+
+                            return (
                             <div
                                 key={m.id}
-                                className={`flex gap-3 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
+                                className={`flex min-w-0 gap-3 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
                             >
                                 <Avatar className="h-8 w-8 shrink-0">
                                     <AvatarFallback className={m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'}>
                                         {m.role === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                                     </AvatarFallback>
                                 </Avatar>
-                                <div className={`flex flex-col gap-2 w-full max-w-full ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                <div className={`flex min-w-0 flex-col gap-2 w-full max-w-full ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
                                     {/* Text Content */}
                                     {/* Text Content */}
                                     {m.content && (
                                         <div
-                                            className={`rounded-2xl px-4 py-3 text-sm shadow-sm ${m.role === 'user'
-                                                ? 'bg-primary text-primary-foreground ml-auto max-w-[85%]'
+                                            className={`min-w-0 overflow-hidden rounded-2xl px-4 py-3 text-sm shadow-sm ${m.role === 'user'
+                                                ? 'bg-primary text-primary-foreground ml-auto max-w-[85%] break-words'
                                                 : 'bg-muted/50 text-foreground w-full max-w-full'
                                                 }`}
                                         >
                                             {m.role === 'user' ? (
                                                 <div className="whitespace-pre-wrap">{m.content}</div>
                                             ) : (
-                                                <div className="prose prose-neutral dark:prose-invert max-w-none text-sm
+                                                <div className="prose prose-neutral dark:prose-invert w-full max-w-full min-w-0 overflow-hidden text-sm
                                                         prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent
                                                         prose-table:border-collapse prose-table:border prose-table:border-border
                                                         prose-th:border prose-th:border-border prose-th:bg-muted/50 prose-th:p-2
@@ -632,28 +638,27 @@ export function Chat() {
                                                         remarkPlugins={[remarkGfm]}
                                                         components={{
                                                             // Custom table styling
-                                                            table: ({ node, ...props }) => (
-                                                                <div className="my-4 w-full overflow-y-auto rounded-lg border border-border">
-                                                                    <table className="w-full text-left" {...props} />
+                                                            table: ({ node: _node, ...props }) => (
+                                                                <div className="my-4 w-full max-w-[calc(100vw-5rem)] min-w-0 overflow-x-auto rounded-lg border border-border sm:max-w-full">
+                                                                    <table className="w-max min-w-full text-left" {...props} />
                                                                 </div>
                                                             ),
-                                                            thead: ({ node, ...props }) => (
+                                                            thead: ({ node: _node, ...props }) => (
                                                                 <thead className="bg-muted/50 text-muted-foreground" {...props} />
                                                             ),
-                                                            th: ({ node, ...props }) => (
+                                                            th: ({ node: _node, ...props }) => (
                                                                 <th className="px-4 py-2 font-medium" {...props} />
                                                             ),
-                                                            td: ({ node, ...props }) => (
+                                                            td: ({ node: _node, ...props }) => (
                                                                 <td className="border-t border-border px-4 py-2" {...props} />
                                                             ),
                                                             // Custom link styling
-                                                            a: ({ node, ...props }) => (
+                                                            a: ({ node: _node, ...props }) => (
                                                                 <a className="font-medium text-primary underline underline-offset-4 hover:text-primary/80" {...props} />
                                                             ),
                                                             // Custom code block styling
-                                                            code: ({ node, className, children, ...props }) => {
+                                                            code: ({ node: _node, className, children, ...props }) => {
                                                                 const match = /language-(\w+)/.exec(className || '')
-                                                                // @ts-ignore
                                                                 const isInline = !match && !String(children).includes('\n')
 
                                                                 if (isInline) {
@@ -665,7 +670,7 @@ export function Chat() {
                                                                 }
 
                                                                 return (
-                                                                    <div className="relative my-4 overflow-hidden rounded-lg border bg-zinc-950 dark:bg-zinc-900">
+                                                                    <div className="relative my-4 max-w-[calc(100vw-5rem)] overflow-hidden rounded-lg border bg-zinc-950 dark:bg-zinc-900 sm:max-w-full">
                                                                         <div className="flex items-center justify-between px-4 py-2 text-xs text-zinc-50 border-b border-zinc-700 bg-zinc-800/50">
                                                                             <span>{match?.[1] || 'text'}</span>
                                                                         </div>
@@ -677,13 +682,13 @@ export function Chat() {
                                                                     </div>
                                                                 )
                                                             },
-                                                            ul: ({ node, ...props }) => (
+                                                            ul: ({ node: _node, ...props }) => (
                                                                 <ul className="my-2 ml-6 list-disc [&>li]:mt-1" {...props} />
                                                             ),
-                                                            ol: ({ node, ...props }) => (
+                                                            ol: ({ node: _node, ...props }) => (
                                                                 <ol className="my-2 ml-6 list-decimal [&>li]:mt-1" {...props} />
                                                             ),
-                                                            li: ({ node, ...props }) => (
+                                                            li: ({ node: _node, ...props }) => (
                                                                 <li className="" {...props} />
                                                             ),
                                                         }}
@@ -696,13 +701,12 @@ export function Chat() {
                                     )}
 
                                     {/* Tool Invocations */}
-                                    {m.toolInvocations?.map((toolInvocation: any) => {
+                                    {m.toolInvocations?.map((toolInvocation) => {
                                         const toolCallId = toolInvocation.toolCallId;
                                         const isComplete = toolInvocation.state === 'result';
-                                        const isError = toolInvocation.state === 'result' && !toolInvocation.result; // Basic error check
 
                                         return (
-                                            <div key={toolCallId} className="bg-muted/30 rounded-lg p-3 text-xs border border-border/50 w-full animate-in fade-in zoom-in-95 duration-200">
+                                            <div key={toolCallId} className="bg-muted/30 min-w-0 rounded-lg p-3 text-xs border border-border/50 w-full animate-in fade-in zoom-in-95 duration-200">
                                                 <div className="flex items-center gap-2 font-medium text-muted-foreground">
                                                     {isComplete ? (
                                                         <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
@@ -736,7 +740,8 @@ export function Chat() {
                                     })}
                                 </div>
                             </div>
-                        ))}
+                            )
+                        })}
 
                         {/* Loading Indicator */}
                         {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
@@ -765,7 +770,7 @@ export function Chat() {
                         <div ref={scrollRef} />
                     </div>
                         </ScrollArea>
-                        <CardFooter className="p-4 border-t bg-background/50 backdrop-blur-sm flex flex-col gap-3">
+                        <CardFooter className="flex-none border-t bg-background/50 p-3 backdrop-blur-sm flex flex-col gap-3 sm:p-4">
                             {/* Suggested Actions - Scrollable list above input */}
                             <div className="w-full overflow-x-auto pb-2 scrollbar-hide flex gap-2">
                                 {currentSuggestions.map((action, i) => (
@@ -780,7 +785,7 @@ export function Chat() {
                                 ))}
                             </div>
 
-                            <form onSubmit={handleSubmit} className="flex w-full gap-2 items-end">
+                            <form onSubmit={handleSubmit} className="flex w-full min-w-0 gap-2 items-end">
                                 <Textarea
                                     value={input}
                                     onChange={handleInputChange}

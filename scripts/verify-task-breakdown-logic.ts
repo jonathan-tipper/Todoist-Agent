@@ -67,7 +67,7 @@ async function run() {
     console.log('Testing Task Breakdown Logic... (Retry with Step-by-Step instruction)');
 
     try {
-        const { text, toolCalls, steps } = await generateText({
+        const { text, toolCalls, steps: _steps } = await generateText({
             model: venice('llama-3.3-70b'),
             system: SYSTEM_PROMPT,
             messages: [

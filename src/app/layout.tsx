@@ -14,6 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
   title: "Todoist Agent",
   description: "AI-powered proactive life planner for Todoist and Google Calendar",
   manifest: "/manifest.json",

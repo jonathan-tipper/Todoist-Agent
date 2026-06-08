@@ -1,5 +1,9 @@
 
 import { TodoistApi } from '@doist/todoist-api-typescript'
+import type {
+    AddTaskArgs as TodoistAddTaskArgs,
+    UpdateTaskArgs as TodoistUpdateTaskArgs,
+} from '@doist/todoist-api-typescript'
 
 const getTodoistClient = () => {
     const token = process.env.TODOIST_API_TOKEN
@@ -22,20 +26,18 @@ export const getTasks = async (filter?: string) => {
         return 'results' in response ? response.results : response
     } catch (error) {
         console.error('Error fetching tasks:', error)
-        return []
+        throw error
     }
 }
 
 export const getProjects = async () => {
     try {
         const todoist = getTodoistClient()
-        // v6 getProjects returns GetProjectsResponse or array? type definiton says GetProjectsResponse in v6.4.0? 
-        // Let's assume response.results or response.
-        const response: any = await todoist.getProjects()
-        return response.results ? response.results : response
+        const response = await todoist.getProjects()
+        return response.results
     } catch (error) {
         console.error('Error fetching projects:', error)
-        return []
+        throw error
     }
 }
 
@@ -72,7 +74,7 @@ type AddTaskArgs = {
 export const addTask = async (args: AddTaskArgs) => {
     try {
         const todoist = getTodoistClient()
-        const task = await todoist.addTask({
+        const baseTaskArgs = {
             content: args.content,
             description: args.description,
             dueString: args.dueString,
@@ -83,11 +85,15 @@ export const addTask = async (args: AddTaskArgs) => {
             parentId: args.parentId,
             order: args.order,
             labels: args.labels,
-            ...(args.duration && {
+        } satisfies TodoistAddTaskArgs
+        const taskArgs: TodoistAddTaskArgs = args.duration
+            ? {
+                ...baseTaskArgs,
                 duration: args.duration.amount,
                 durationUnit: args.duration.unit,
-            }),
-        } as any)
+            }
+            : baseTaskArgs
+        const task = await todoist.addTask(taskArgs)
         return task
     } catch (error) {
         console.error('Error adding task:', error)
@@ -151,7 +157,7 @@ export const updateTask = async (id: string, args: UpdateTaskArgs) => {
             sdkArgs.duration = duration === null ? null : duration.amount
             sdkArgs.durationUnit = duration === null ? null : duration.unit
         }
-        const isSuccess = await todoist.updateTask(id, sdkArgs as any)
+        const isSuccess = await todoist.updateTask(id, sdkArgs as unknown as TodoistUpdateTaskArgs)
         return isSuccess
     } catch (error) {
         console.error('Error updating task:', error)

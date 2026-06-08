@@ -26,7 +26,7 @@ async function testStream() {
                 getTasks: tool({
                     description: 'Get active tasks from Todoist.',
                     parameters: z.object({ filter: z.string().optional() }),
-                    execute: async ({ filter }) => {
+                    execute: async ({ filter: _filter }) => {
                         console.log('Calling getTasks logic...')
                         return [{ id: '1', content: 'Test Task' }]
                     },

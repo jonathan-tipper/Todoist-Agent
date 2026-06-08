@@ -48,7 +48,7 @@ export const getEvents = async (timeMin?: string, timeMax?: string) => {
         }))
     } catch (error) {
         console.error('Error fetching calendar events:', error)
-        return [] // Return empty array on error to allow graceful degradation
+        throw error
     }
 }
 

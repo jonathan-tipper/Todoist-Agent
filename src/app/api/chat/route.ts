@@ -4,11 +4,11 @@ import { streamText, tool as toolHelper } from 'ai'
 import { z } from 'zod'
 import * as todoist from '@/lib/todoist'
 import * as calendar from '@/lib/google-calendar'
+import { createJsonError, logChatDebug, parseChatRequest } from '@/lib/chat-api'
 
 export const maxDuration = 60
 
-// Bypass strict type checking for tool helper
-const tool = toolHelper as any
+const tool = toolHelper
 
 // Initialize Venice provider using OpenAI compatibility
 const venice = createOpenAI({
@@ -30,6 +30,44 @@ type VeniceModel = {
         offline?: boolean
     }
 }
+
+const durationParameters = z.object({
+    amount: z.number().int().positive().describe('Duration amount, e.g. 30, 90, 2'),
+    unit: z.enum(['minute', 'day']).describe('Duration unit: "minute" or "day"'),
+})
+
+const addTaskParameters = z.object({
+    content: z.string().describe('The task content/title'),
+    description: z.string().optional().describe('Detailed description'),
+    dueString: z.string().optional().describe('Natural language due date, e.g., "today at 10am"'),
+    priority: z.number().optional().describe('Priority: 4 (Urgent) to 1 (Low)'),
+    projectId: z.string().optional().describe('The project ID to add the task to'),
+    sectionId: z.string().optional().describe('The section ID to add the task to'),
+    parentId: z.string().optional().describe('The ID of the parent task to create a subtask'),
+    labels: z.array(z.string()).optional().describe('List of label names'),
+    duration: durationParameters.optional().describe('How long the task will take, e.g. { amount: 90, unit: "minute" }'),
+})
+
+const updateTaskParameters = z.object({
+    id: z.string().describe('The ID of the task to update'),
+    content: z.string().optional(),
+    dueString: z.string().optional(),
+    priority: z.number().optional(),
+    labels: z.array(z.string()).optional(),
+    duration: durationParameters.nullable().optional().describe('Set or update task duration. Pass null to remove existing duration.'),
+})
+
+const suggestActionsParameters = z.object({
+    actions: z.array(z.object({
+        label: z.string().describe('Short button text, e.g., "Reschedule"'),
+        action: z.string().describe('The full text to send if clicked, e.g., "Reschedule all low priority tasks to tomorrow"'),
+        type: z.enum(['search', 'calendar', 'task', 'plan']).describe('Icon type hint'),
+    })).max(4),
+})
+
+type AddTaskParameters = z.infer<typeof addTaskParameters>
+type UpdateTaskParameters = z.infer<typeof updateTaskParameters>
+type SuggestActionsParameters = z.infer<typeof suggestActionsParameters>
 
 async function resolveModelId(model?: string) {
     if (model && model !== AUTO_MODEL_VALUE && model !== AUTO_OPEN_MODEL_VALUE) {
@@ -143,24 +181,29 @@ Examples:
 - If user is overwhelmed: "Defer all non-urgent", "Move to tomorrow".`
 
 export async function POST(req: Request) {
-    console.log('--- POST /api/chat received ---');
+    logChatDebug('--- POST /api/chat received ---');
 
     if (!process.env.VENICE_API_KEY) {
         console.error('VENICE_API_KEY is missing');
-        return new Response(JSON.stringify({ error: 'Configuration Error: VENICE_API_KEY missing' }), { status: 500 });
+        return createJsonError('Configuration Error: VENICE_API_KEY missing', 500);
+    }
+
+    if (!process.env.ACCESS_CODE) {
+        console.error('ACCESS_CODE is missing');
+        return createJsonError('Configuration Error: ACCESS_CODE missing', 500);
     }
 
     const authHeader = req.headers.get('Authorization')
     if (authHeader !== `Bearer ${process.env.ACCESS_CODE}`) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+        return createJsonError('Unauthorized', 401)
     }
 
     try {
-        const { messages, model } = await req.json()
-        console.log('Messages received:', messages.length);
+        const { messages, model } = parseChatRequest(await req.json())
+        logChatDebug('Messages received:', messages.length);
 
         const modelId = await resolveModelId(model)
-        console.log('Using model:', modelId)
+        logChatDebug('Using model:', modelId)
 
         const result = streamText({
             model: venice(modelId),
@@ -172,9 +215,9 @@ export async function POST(req: Request) {
                     description: 'Get all Todoist projects.',
                     parameters: z.object({}),
                     execute: async () => {
-                        console.log('Calling getProjects')
+                        logChatDebug('Calling getProjects')
                         const res = await todoist.getProjects()
-                        console.log('getProjects result:', res ? 'Success' : 'Empty')
+                        logChatDebug('getProjects result:', res ? 'Success' : 'Empty')
                         return res
                     },
                 }),
@@ -184,7 +227,7 @@ export async function POST(req: Request) {
                         name: z.string().describe('The name of the new project'),
                     }),
                     execute: async ({ name }: { name: string }) => {
-                        console.log('Calling addProject', { name })
+                        logChatDebug('Calling addProject', { name })
                         return await todoist.addProject(name)
                     },
                 }),
@@ -194,30 +237,17 @@ export async function POST(req: Request) {
                         filter: z.string().optional().describe('Filter string, e.g., "today", "#Project", "@Label", "priority 1"'),
                     }),
                     execute: async ({ filter }: { filter?: string }) => {
-                        console.log('Calling getTasks with filter:', filter)
+                        logChatDebug('Calling getTasks with filter:', filter)
                         const res = await todoist.getTasks(filter)
-                        console.log('getTasks result count:', Array.isArray(res) ? res.length : 'Unknown')
+                        logChatDebug('getTasks result count:', Array.isArray(res) ? res.length : 'Unknown')
                         return res
                     },
                 }),
                 addTask: tool({
                     description: 'Add a task to Todoist. To add a subtask, pass the parent task ID as `parentId`.',
-                    parameters: z.object({
-                        content: z.string().describe('The task content/title'),
-                        description: z.string().optional().describe('Detailed description'),
-                        dueString: z.string().optional().describe('Natural language due date, e.g., "today at 10am"'),
-                        priority: z.number().optional().describe('Priority: 4 (Urgent) to 1 (Low)'),
-                        projectId: z.string().optional().describe('The project ID to add the task to'),
-                        sectionId: z.string().optional().describe('The section ID to add the task to'),
-                        parentId: z.string().optional().describe('The ID of the parent task to create a subtask'),
-                        labels: z.array(z.string()).optional().describe('List of label names'),
-                        duration: z.object({
-                            amount: z.number().int().positive().describe('Duration amount, e.g. 30, 90, 2'),
-                            unit: z.enum(['minute', 'day']).describe('Duration unit: "minute" or "day"'),
-                        }).optional().describe('How long the task will take, e.g. { amount: 90, unit: "minute" }'),
-                    }),
-                    execute: async (args: any) => {
-                        console.log('Calling addTask', args)
+                    parameters: addTaskParameters,
+                    execute: async (args: AddTaskParameters) => {
+                        logChatDebug('Calling addTask', args)
                         return await todoist.addTask(args)
                     },
                 }),
@@ -228,24 +258,14 @@ export async function POST(req: Request) {
                         content: z.string().describe('The comment content'),
                     }),
                     execute: async ({ taskId, content }: { taskId: string, content: string }) => {
-                        console.log('Calling addComment', { taskId, content })
+                        logChatDebug('Calling addComment', { taskId, content })
                         return await todoist.addComment({ taskId, content })
                     },
                 }),
                 updateTask: tool({
                     description: 'Update an existing task in Todoist.',
-                    parameters: z.object({
-                        id: z.string().describe('The ID of the task to update'),
-                        content: z.string().optional(),
-                        dueString: z.string().optional(),
-                        priority: z.number().optional(),
-                        labels: z.array(z.string()).optional(),
-                        duration: z.object({
-                            amount: z.number().int().positive(),
-                            unit: z.enum(['minute', 'day']),
-                        }).nullable().optional().describe('Set or update task duration. Pass null to remove existing duration.'),
-                    }),
-                    execute: async ({ id, ...args }: { id: string, [key: string]: any }) => todoist.updateTask(id, args),
+                    parameters: updateTaskParameters,
+                    execute: async ({ id, ...args }: UpdateTaskParameters) => todoist.updateTask(id, args),
                 }),
                 moveTask: tool({
                     description: 'Move a task to a different project.',
@@ -263,14 +283,24 @@ export async function POST(req: Request) {
                     execute: async ({ id }: { id: string }) => todoist.closeTask(id),
                 }),
                 fetchCalendarEvents: tool({
-                    description: 'Get events from Google Calendar.',
+                    description: 'Get events from Google Calendar. Returns an unavailable marker if calendar access is not configured or fails.',
                     parameters: z.object({
                         timeMin: z.string().optional().describe('ISO string for start time (default: now)'),
                         timeMax: z.string().optional().describe('ISO string for end time'),
                     }),
                     execute: async ({ timeMin, timeMax }: { timeMin?: string; timeMax?: string }) => {
-                        console.log('Calling fetchCalendarEvents', { timeMin, timeMax })
-                        return await calendar.getEvents(timeMin, timeMax)
+                        logChatDebug('Calling fetchCalendarEvents', { timeMin, timeMax })
+                        try {
+                            const events = await calendar.getEvents(timeMin, timeMax)
+                            return { events, unavailable: false }
+                        } catch (error) {
+                            console.error('Calendar unavailable:', error)
+                            return {
+                                events: [],
+                                unavailable: true,
+                                message: error instanceof Error ? error.message : 'Calendar unavailable',
+                            }
+                        }
                     },
                 }),
                 createCalendarEvent: tool({
@@ -284,33 +314,30 @@ export async function POST(req: Request) {
                 }),
                 suggestActions: tool({
                     description: 'Suggest follow-up actions to the user based on the current context.',
-                    parameters: z.object({
-                        actions: z.array(z.object({
-                            label: z.string().describe('Short button text, e.g., "Reschedule"'),
-                            action: z.string().describe('The full text to send if clicked, e.g., "Reschedule all low priority tasks to tomorrow"'),
-                            type: z.enum(['search', 'calendar', 'task', 'plan']).describe('Icon type hint'),
-                        })).max(4),
-                    }),
-                    execute: async ({ actions }: { actions: any[] }) => {
-                        console.log('Suggesting actions:', actions);
+                    parameters: suggestActionsParameters,
+                    execute: async ({ actions }: SuggestActionsParameters) => {
+                        logChatDebug('Suggesting actions:', actions);
                         return { suggested: true, count: actions.length };
                     },
                 }),
             },
             onFinish: (event) => {
-                console.log('Stream finished. Usage:', event.usage);
-                console.log('Finish reason:', event.finishReason);
-                if (event.text) console.log('Response text:', event.text);
+                logChatDebug('Stream finished. Usage:', event.usage);
+                logChatDebug('Finish reason:', event.finishReason);
+                if (event.text) logChatDebug('Response text:', event.text);
             },
             onError: (error) => {
                 console.error('Stream error:', error);
             }
         })
 
-        // @ts-ignore
         return result.toDataStreamResponse()
     } catch (error) {
         console.error('API Route Error:', error);
-        return new Response(JSON.stringify({ error: 'Internal Server Error' }), { status: 500 });
+        if (error instanceof z.ZodError) {
+            return createJsonError('Invalid chat request', 400)
+        }
+
+        return createJsonError('Internal Server Error', 500);
     }
 }

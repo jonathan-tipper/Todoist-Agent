@@ -26,7 +26,7 @@ The agent will have full capability to manipulate Todoist entities:
 ### 3.3 Calendar Integration (Google)
 - **Read-Only Availability**: Fetch upcoming events to inform task scheduling.
 - **Conflict Detection**: Warn the user if they try to schedule too many tasks on a busy day.
-*(Note: Write actions to Calendar are handled via Todoist's native 2-way sync)*
+- **Calendar Blocking**: Create explicit Google Calendar time blocks when the user confirms a schedule.
 
 ## 4. Technical Stack
 - **Frontend**: Next.js (Already set up), TailwindCSS, Shadcn/UI

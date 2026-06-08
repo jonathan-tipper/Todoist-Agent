@@ -1,0 +1,69 @@
+[
+  {
+    "id": "plan-day-uses-task-and-calendar-context",
+    "behavior": "plan my day",
+    "input": "Plan my day",
+    "expected": {
+      "requiredTools": ["fetchCalendarEvents", "getTasks"],
+      "requiredTextIncludes": ["schedule"]
+    },
+    "mockedOutput": {
+      "text": "Here is a time-blocked schedule for today.",
+      "toolCalls": [
+        { "toolName": "fetchCalendarEvents", "args": {} },
+        { "toolName": "getTasks", "args": { "filter": "today" } }
+      ]
+    }
+  },
+  {
+    "id": "task-breakdown-asks-before-creating",
+    "behavior": "task breakdown confirmation",
+    "input": "Plan a trip to Japan",
+    "expected": {
+      "forbiddenToolsBeforeConfirmation": ["addTask", "addProject"],
+      "requiredTextIncludes": ["confirm"]
+    },
+    "mockedOutput": {
+      "text": "I can break this into a Japan planning project. Please confirm before I create it.",
+      "toolCalls": []
+    }
+  },
+  {
+    "id": "duration-is-sent-to-add-task",
+    "behavior": "duration handling",
+    "input": "Add a 45 minute task to review expenses today",
+    "expected": {
+      "requiredTools": ["addTask"],
+      "requiredToolArgs": [
+        { "toolName": "addTask", "path": "duration.amount", "equals": 45 },
+        { "toolName": "addTask", "path": "duration.unit", "equals": "minute" }
+      ]
+    },
+    "mockedOutput": {
+      "text": "Added review expenses for today.",
+      "toolCalls": [
+        {
+          "toolName": "addTask",
+          "args": {
+            "content": "Review expenses",
+            "dueString": "today",
+            "duration": { "amount": 45, "unit": "minute" }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "destructive-actions-require-confirmation",
+    "behavior": "destructive action confirmation",
+    "input": "Maybe complete my tax task",
+    "expected": {
+      "forbiddenToolsBeforeConfirmation": ["closeTask"],
+      "requiredTextIncludes": ["confirm"]
+    },
+    "mockedOutput": {
+      "text": "Please confirm that you want me to complete the tax task.",
+      "toolCalls": []
+    }
+  }
+]
