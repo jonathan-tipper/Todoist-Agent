@@ -185,7 +185,8 @@ export function Chat() {
         }
     })
 
-    const scrollRef = useRef<HTMLDivElement>(null)
+    const messagesViewportRef = useRef<HTMLDivElement>(null)
+    const isPinnedToBottomRef = useRef(true)
 
     // Check for auth code on mount
     useEffect(() => {
@@ -316,12 +317,39 @@ export function Chat() {
         }
     }, [searchParams, accessCode, messages.length, setInput])
 
-    // Auto-scroll to bottom when messages change
+    const updatePinnedToBottom = useCallback(() => {
+        const viewport = messagesViewportRef.current
+        if (!viewport) return
+
+        const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+        isPinnedToBottomRef.current = distanceFromBottom < 96
+    }, [])
+
+    const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+        const viewport = messagesViewportRef.current
+        if (!viewport) return
+
+        viewport.scrollTo({
+            top: viewport.scrollHeight,
+            behavior,
+        })
+    }, [])
+
+    const submitMessage = useCallback((event: React.FormEvent<HTMLFormElement>) => {
+        isPinnedToBottomRef.current = true
+        handleSubmit(event)
+    }, [handleSubmit])
+
+    // Auto-scroll to bottom while the user is following the latest message.
     useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollIntoView({ behavior: 'smooth' })
-        }
-    }, [messages, isLoading])
+        if (!isPinnedToBottomRef.current) return
+
+        const animationFrame = window.requestAnimationFrame(() => {
+            scrollMessagesToBottom(isLoading ? 'auto' : 'smooth')
+        })
+
+        return () => window.cancelAnimationFrame(animationFrame)
+    }, [messages, isLoading, scrollMessagesToBottom])
 
 
     // Effect to listen for suggestActions tool calls
@@ -375,6 +403,7 @@ export function Chat() {
     const currentSuggestions = dynamicSuggestions.length > 0 ? dynamicSuggestions : defaultSuggestions
 
     const startNewThread = () => {
+        isPinnedToBottomRef.current = true
         setActiveThreadId(createThreadId())
         setMessages([])
         setInput('')
@@ -382,6 +411,7 @@ export function Chat() {
     }
 
     const loadThread = (thread: SavedThread) => {
+        isPinnedToBottomRef.current = true
         setActiveThreadId(thread.id)
         setSelectedModel(thread.model || AUTO_OPEN_MODEL_VALUE)
         setMessages(reviveMessages(thread.messages))
@@ -395,6 +425,7 @@ export function Chat() {
 
             if (threadId === activeThreadId) {
                 const nextActiveThread = nextThreads[0]
+                isPinnedToBottomRef.current = true
                 if (nextActiveThread) {
                     setActiveThreadId(nextActiveThread.id)
                     setSelectedModel(nextActiveThread.model || AUTO_OPEN_MODEL_VALUE)
@@ -527,7 +558,7 @@ export function Chat() {
                     </div>
                 </CardTitle>
             </CardHeader>
-            <CardContent className="flex-1 overflow-hidden p-0 relative">
+            <CardContent className="min-h-0 flex-1 overflow-hidden p-0 relative">
                 <div className="flex h-full min-h-0">
                     {isHistoryOpen && (
                         <aside className="absolute inset-y-0 left-0 z-20 flex w-72 shrink-0 flex-col border-r bg-background shadow-lg md:relative md:shadow-none md:bg-muted/20">
@@ -587,8 +618,13 @@ export function Chat() {
                             </ScrollArea>
                         </aside>
                     )}
-                    <div className="flex min-w-0 flex-1 flex-col">
-                        <ScrollArea className="flex-1 p-4">
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                        <div
+                            ref={messagesViewportRef}
+                            className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4"
+                            onScroll={updatePinnedToBottom}
+                            aria-label="Chat messages"
+                        >
                     <div className="flex flex-col gap-4 pb-4">
                         {messages.length === 0 && (
                             <div className="text-center text-muted-foreground mt-20 px-6">
@@ -762,10 +798,9 @@ export function Chat() {
                                 </div>
                             </div>
                         )}
-                        <div ref={scrollRef} />
                     </div>
-                        </ScrollArea>
-                        <CardFooter className="p-4 border-t bg-background/50 backdrop-blur-sm flex flex-col gap-3">
+                        </div>
+                        <CardFooter className="shrink-0 p-4 border-t bg-background/50 backdrop-blur-sm flex flex-col gap-3">
                             {/* Suggested Actions - Scrollable list above input */}
                             <div className="w-full overflow-x-auto pb-2 scrollbar-hide flex gap-2">
                                 {currentSuggestions.map((action, i) => (
@@ -780,7 +815,7 @@ export function Chat() {
                                 ))}
                             </div>
 
-                            <form onSubmit={handleSubmit} className="flex w-full gap-2 items-end">
+                            <form onSubmit={submitMessage} className="flex w-full gap-2 items-end">
                                 <Textarea
                                     value={input}
                                     onChange={handleInputChange}
@@ -789,7 +824,7 @@ export function Chat() {
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter' && !e.shiftKey) {
                                             e.preventDefault()
-                                            handleSubmit(e as unknown as React.FormEvent<HTMLFormElement>)
+                                            e.currentTarget.form?.requestSubmit()
                                         }
                                     }}
                                 />
