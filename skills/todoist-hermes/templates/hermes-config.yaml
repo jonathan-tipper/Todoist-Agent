@@ -1,0 +1,9 @@
+mcp_servers:
+  todoist:
+    url: "https://ai.todoist.net/mcp"
+    auth: oauth
+    enabled: true
+    timeout: 120
+    tools:
+      resources: false
+      prompts: false
