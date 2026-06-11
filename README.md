@@ -51,6 +51,25 @@ The AI has tool access to:
 - **Dark / light mode**
 - **Access code auth** — a simple shared secret protects the API route; intended for personal or small-team use
 
+## Hermes skill
+
+This repository also includes an installable Hermes skill at [`skills/todoist-hermes`](skills/todoist-hermes). Use it when you want a Hermes agent instance to act as your Todoist assistant without running the Next.js app.
+
+The skill is designed to work with:
+
+- The official hosted Todoist MCP server for normal assistant workflows.
+- A local Todoist API v1 helper for full REST and Sync API coverage.
+- Hermes-provided configuration for the Todoist API token and optional defaults.
+
+Install it locally:
+
+```bash
+mkdir -p ~/.hermes/skills/productivity
+cp -R skills/todoist-hermes ~/.hermes/skills/productivity/todoist-hermes
+```
+
+Then add the MCP server config from [`skills/todoist-hermes/templates/hermes-config.yaml`](skills/todoist-hermes/templates/hermes-config.yaml) to your Hermes config, provide `TODOIST_API_TOKEN`, and start a new Hermes session with `/todoist-hermes`.
+
 ## Getting started
 
 ### Prerequisites
@@ -115,6 +134,8 @@ src/
   lib/
     todoist.ts               # Todoist API wrapper
     google-calendar.ts       # Google Calendar API wrapper
+skills/
+  todoist-hermes/             # Installable Hermes skill for Todoist MCP/API access
 public/
   manifest.json              # PWA manifest with shortcuts
 ```
